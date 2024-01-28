@@ -14,12 +14,296 @@ from aiogram.filters import Command
 from config import TOKEN
 from bd_connect import stroka, product_reseach
 
+from aiogram.filters import StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import default_state, State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
 
+#----машина
+from aiogram import Bot, Dispatcher, F
+from aiogram.filters import Command, CommandStart, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import default_state, State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import (CallbackQuery, InlineKeyboardButton,
+                           InlineKeyboardMarkup, Message, PhotoSize)
+#-----
 bot = Bot(token=TOKEN)
+# Инициализируем хранилище (создаем экземпляр класса MemoryStorage)
+storage = MemoryStorage()
 dp = Dispatcher()
 
+#машины состояний
+# Создаем "базу данных" пользователей
+user_dict: dict[int, dict[str, str | int | bool]] = {}
 
 
+# Cоздаем класс, наследуемый от StatesGroup, для группы состояний нашей FSM
+class FSMFillForm(StatesGroup):
+    # Создаем экземпляры класса State, последовательно
+    # перечисляя возможные состояния, в которых будет находиться
+    # бот в разные моменты взаимодейтсвия с пользователем
+    fill_name = State()  # Состояние ожидания ввода имени
+    fill_age = State()  # Состояние ожидания ввода возраста
+    fill_type = State()  # Состояние ожидания выбора пола
+    upload_photo = State()  # Состояние ожидания загрузки фото
+    fill_wish_news = State()  # Состояние ожидания выбора получать ли новости
+
+
+# Этот хэндлер будет срабатывать на команду /start вне состояний
+# и предлагать перейти к заполнению анкеты, отправив команду /fillform
+@dp.message(CommandStart(), StateFilter(default_state))
+async def process_start_command(message: Message):
+    await message.answer(
+        text='Этот бот демонстрирует работу FSM\n\n'
+             'Чтобы перейти к заполнению анкеты - '
+             'отправьте команду /fillform'
+    )
+
+
+# Этот хэндлер будет срабатывать на команду "/cancel" в состоянии
+# по умолчанию и сообщать, что эта команда работает внутри машины состояний
+@dp.message(Command(commands='cancel'), StateFilter(default_state))
+async def process_cancel_command(message: Message):
+    await message.answer(
+        text='Отменять нечего. Вы вне машины состояний\n\n'
+             'Чтобы перейти к заполнению анкеты - '
+             'отправьте команду /fillform'
+    )
+
+
+# Этот хэндлер будет срабатывать на команду "/cancel" в любых состояниях,
+# кроме состояния по умолчанию, и отключать машину состояний
+@dp.message(Command(commands='cancel'), ~StateFilter(default_state))
+async def process_cancel_command_state(message: Message, state: FSMContext):
+    await message.answer(
+        text='Вы вышли из машины состояний\n\n'
+             'Чтобы снова перейти к заполнению анкеты - '
+             'отправьте команду /fillform'
+    )
+    # Сбрасываем состояние и очищаем данные, полученные внутри состояний
+    await state.clear()
+
+
+# Этот хэндлер будет срабатывать на команду /fillform
+# и переводить бота в состояние ожидания ввода имени
+@dp.message(Command(commands='fillform'), StateFilter(default_state))
+async def process_fillform_command(message: Message, state: FSMContext):
+    await message.answer(text='Пожалуйста, введите ваше имя')
+    # Устанавливаем состояние ожидания ввода имени
+    await state.set_state(FSMFillForm.fill_name)
+
+
+# Этот хэндлер будет срабатывать, если введено корректное имя
+# и переводить в состояние ожидания ввода возраста
+@dp.message(StateFilter(FSMFillForm.fill_name), F.text.isalpha())
+async def process_name_sent(message: Message, state: FSMContext):
+    # Cохраняем введенное имя в хранилище по ключу "name"
+    await state.update_data(name=message.text)
+    await message.answer(text='Спасибо!\n\nА теперь введите ваш возраст')
+    # Устанавливаем состояние ожидания ввода возраста
+    await state.set_state(FSMFillForm.fill_age)
+
+
+# Этот хэндлер будет срабатывать, если во время ввода имени
+# будет введено что-то некорректное
+@dp.message(StateFilter(FSMFillForm.fill_name))
+async def warning_not_name(message: Message):
+    await message.answer(
+        text='То, что вы отправили не похоже на имя\n\n'
+             'Пожалуйста, введите ваше имя\n\n'
+             'Если вы хотите прервать заполнение анкеты - '
+             'отправьте команду /cancel'
+    )
+
+
+# Этот хэндлер будет срабатывать, если введен корректный возраст
+# и переводить в состояние выбора пола
+@dp.message(StateFilter(FSMFillForm.fill_age),
+            lambda x: x.text.isdigit() and 4 <= int(x.text) <= 120)
+async def process_age_sent(message: Message, state: FSMContext):
+    # Cохраняем возраст в хранилище по ключу "age"
+    await state.update_data(age=message.text)
+    # Создаем объекты инлайн-кнопок
+    candle_button = InlineKeyboardButton(
+        text='свеча',
+        callback_data='свеча'
+    )
+    diff_button = InlineKeyboardButton(
+        text='диффузор',
+        callback_data='диффузор'
+    )
+    sache_button = InlineKeyboardButton(
+        text='саше',
+        callback_data='саше'
+    )
+    # Добавляем кнопки в клавиатуру (две в одном ряду и одну в другом)
+    keyboard: list[list[InlineKeyboardButton]] = [
+        [candle_button, diff_button],
+        [sache_button]
+    ]
+    # Создаем объект инлайн-клавиатуры
+    markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
+    # Отправляем пользователю сообщение с клавиатурой
+    await message.answer(
+        text='Спасибо!\n\nУкажите категорию',
+        reply_markup=markup
+    )
+    # Устанавливаем состояние ожидания выбора пола
+    await state.set_state(FSMFillForm.fill_type)
+
+
+# Этот хэндлер будет срабатывать, если во время ввода возраста
+# будет введено что-то некорректное
+@dp.message(StateFilter(FSMFillForm.fill_age))
+async def warning_not_age(message: Message):
+    await message.answer(
+        text='Возраст должен быть целым числом от 4 до 120\n\n'
+             'Попробуйте еще раз\n\nЕсли вы хотите прервать '
+             'заполнение анкеты - отправьте команду /cancel'
+    )
+
+
+# Этот хэндлер будет срабатывать на нажатие кнопки при
+# выборе пола и переводить в состояние отправки фото
+@dp.callback_query(StateFilter(FSMFillForm.fill_type),
+                   F.data.in_(['свеча', 'диффузор', 'саше']))
+async def process_gender_press(callback: CallbackQuery, state: FSMContext):
+    # Cохраняем пол (callback.data нажатой кнопки) в хранилище,
+    # по ключу "type"
+    await state.update_data(type=callback.data)
+    # Удаляем сообщение с кнопками, потому что следующий этап - загрузка фото
+    # чтобы у пользователя не было желания тыкать кнопки
+    await callback.message.delete()
+    await callback.message.answer(
+        text='Спасибо! А теперь загрузите, пожалуйста, ваше фото'
+    )
+    # Устанавливаем состояние ожидания загрузки фото
+    await state.set_state(FSMFillForm.upload_photo)
+
+
+# Этот хэндлер будет срабатывать, если во время выбора пола
+# будет введено/отправлено что-то некорректное
+@dp.message(StateFilter(FSMFillForm.fill_type))
+async def warning_not_gender(message: Message):
+    await message.answer(
+        text='Пожалуйста, пользуйтесь кнопками '
+             'при выборе пола\n\nЕсли вы хотите прервать '
+             'заполнение анкеты - отправьте команду /cancel'
+    )
+
+
+# Этот хэндлер будет срабатывать, если отправлено фото
+# и переводить в состояние выбора образования
+#foto -> edu
+@dp.message(StateFilter(FSMFillForm.upload_photo),
+            F.photo[-1].as_('largest_photo'))
+async def process_photo_sent(message: Message,
+                             state: FSMContext,
+                             largest_photo: PhotoSize):
+    await state.update_data(
+        photo_unique_id=largest_photo.file_unique_id,
+        photo_id=largest_photo.file_id)
+    # Создаем объекты инлайн-кнопок
+    yes_news_button = InlineKeyboardButton(
+        text='Да',
+        callback_data='yes_news'
+    )
+    no_news_button = InlineKeyboardButton(
+        text='Нет, спасибо',
+        callback_data='no_news')
+    # Добавляем кнопки в клавиатуру в один ряд
+    keyboard: list[list[InlineKeyboardButton]] = [
+        [yes_news_button, no_news_button]
+    ]
+    # Создаем объект инлайн-клавиатуры
+    markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
+    # Редактируем предыдущее сообщение с кнопками, отправляя
+    # новый текст и новую клавиатуру
+    await message.answer(
+        text='Спасибо!\n\nОстался последний шаг.\n'
+             'Хотели бы вы получать новости?',
+        reply_markup=markup
+    )
+    # Устанавливаем состояние ожидания выбора получать новости или нет
+    await state.set_state(FSMFillForm.fill_wish_news)
+
+
+# Этот хэндлер будет срабатывать, если во время отправки фото
+# будет введено/отправлено что-то некорректное
+@dp.message(StateFilter(FSMFillForm.upload_photo))
+async def warning_not_photo(message: Message):
+    await message.answer(
+        text='Пожалуйста, на этом шаге отправьте '
+             'ваше фото\n\nЕсли вы хотите прервать '
+             'заполнение анкеты - отправьте команду /cancel'
+    )
+
+
+# Этот хэндлер будет срабатывать на выбор получать или
+# не получать новости и выводить из машины состояний
+@dp.callback_query(StateFilter(FSMFillForm.fill_wish_news),
+                   F.data.in_(['yes_news', 'no_news']))
+async def process_wish_news_press(callback: CallbackQuery, state: FSMContext):
+    # Cохраняем данные о получении новостей по ключу "wish_news"
+    await state.update_data(wish_news=callback.data == 'yes_news')
+    # Добавляем в "базу данных" анкету пользователя
+    # по ключу id пользователя
+    user_dict[callback.from_user.id] = await state.get_data()
+    # Завершаем машину состояний
+    await state.clear()
+    # Отправляем в чат сообщение о выходе из машины состояний
+    await callback.message.edit_text(
+        text='Спасибо! Ваши данные сохранены!\n\n'
+             'Вы вышли из машины состояний'
+    )
+    # Отправляем в чат сообщение с предложением посмотреть свою анкету
+    await callback.message.answer(
+        text='Чтобы посмотреть данные вашей '
+             'анкеты - отправьте команду /showdata'
+    )
+
+
+# Этот хэндлер будет срабатывать, если во время согласия на получение
+# новостей будет введено/отправлено что-то некорректное
+@dp.message(StateFilter(FSMFillForm.fill_wish_news))
+async def warning_not_wish_news(message: Message):
+    await message.answer(
+        text='Пожалуйста, воспользуйтесь кнопками!\n\n'
+             'Если вы хотите прервать заполнение анкеты - '
+             'отправьте команду /cancel'
+    )
+
+
+# Этот хэндлер будет срабатывать на отправку команды /showdata
+# и отправлять в чат данные анкеты, либо сообщение об отсутствии данных
+@dp.message(Command(commands='showdata'), StateFilter(default_state))
+async def process_showdata_command(message: Message):
+    # Отправляем пользователю анкету, если она есть в "базе данных"
+    if message.from_user.id in user_dict:
+        await message.answer_photo(
+            photo=user_dict[message.from_user.id]['photo_id'],
+            caption=f'Имя: {user_dict[message.from_user.id]["name"]}\n'
+                    f'Возраст: {user_dict[message.from_user.id]["age"]}\n'
+                    f'Категория: {user_dict[message.from_user.id]["type"]}\n'
+                    f'Получать новости: {user_dict[message.from_user.id]["wish_news"]}'
+        )
+    else:
+        # Если анкеты пользователя в базе нет - предлагаем заполнить
+        await message.answer(
+            text='Вы еще не заполняли анкету. Чтобы приступить - '
+                 'отправьте команду /fillform'
+        )
+
+
+# Этот хэндлер будет срабатывать на любые сообщения, кроме тех
+# для которых есть отдельные хэндлеры, вне состояний
+@dp.message(StateFilter(default_state))
+async def send_echo(message: Message):
+    await message.reply(text='Извините, моя твоя не понимать')
+
+
+#------------------------------------------------
 # Если не указать фильтр F.text,  то хэндлер сработает даже на картинку с подписью /test
 # @dp.message(F.text, Command("test"))
 # async def any_message(message: Message):
@@ -40,36 +324,11 @@ async def process_start_command(message: types.Message):
 async def process_help_command(message: types.Message):
     await message.reply("Напиши мне что-нибудь, и я отпрпавлю этот текст тебе в ответ!")
 
-
-# @dp.message_handler()
-# async def echo_message(msg: types.Message):
-#      await bot.send_message(msg.from_user.id, msg.text)
-
-
-@dp.message(Command('pogoda'))
-async def pogoda_command(message: types.Message):
-    await message.reply("Погода сегодня хорошая")
-
-@dp.message(Command('baza'))
-async def baza_command(message: types.Message):
-    await message.reply(stroka())
-
-@dp.message(Command('start1'))           #создаёт кнопочки
-async def cmd_start(message: types.Message):
-    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard = True) #меньшает кнопочки, озвращает обратно к клавиутуре)
-    buttons = ['кнопочка 1', 'кнопочка 2']
-    keyboard.add(*buttons) #*-ля распаковки списка, а каждый add создает новую строку
-    await message.answer("Это мои кнопочки", reply_markup = keyboard)
+# @dp.message()
+# async def send_echo(message: types.Message):
+#     await message.reply(text=message.text)
 
 
-
-@dp.message(F.text =='кнопочка 1')
-async def but1(message: types.Message):
-    await message.reply("Хыыыыыы")
-
-@dp.message(F.text == 'кнопочка 2')
-async def but2(message: types.Message):
-    await message.reply("Хиииии")
 
 #-----------------------------b---o---t---------------
 @dp.message(Command('candle'))           #создаёт кнопочки
@@ -95,16 +354,75 @@ async def but4(message: types.Message):
     await message.reply("*Саше: \n*" + product_reseach(3), parse_mode="Markdown")
 
 
-# #----------------
-# inline_btn_1 = InlineKeyboardButton('Первая кнопка!', callback_data='button1')
-# inline_kb1 = InlineKeyboardMarkup().add(inline_btn_1)
-#
-# @dp.message_handler(commands=['1'])
-# async def process_command_1(message: types.Message):
-#     await message.reply("Первая инлайн кнопка", reply_markup=kb.inline_kb1)
-#
 
 
+# Создаем объекты инлайн-кнопок
+add_button = InlineKeyboardButton(
+    text='Добавить товар',
+    callback_data='add_product_press'
+)
+update_button = InlineKeyboardButton(
+    text='Изменить товар',
+    callback_data='update_product_press'
+)
+delete_button = InlineKeyboardButton(
+    text = 'Удалить товар',
+    callback_data='delete_product_press'
+)
+# Создаем объект инлайн-клавиатуры
+keyboard = InlineKeyboardMarkup(
+    inline_keyboard=[[add_button],
+                     [update_button],
+                     [delete_button]]
+)
+# Этот хэндлер будет срабатывать на команду "/start"
+# и отправлять в чат клавиатуру с инлайн-кнопками
+@dp.message(Command('product'))
+async def process_start_command(message: types.Message):
+    await message.answer(
+        text='Выбери опцию',
+        reply_markup=keyboard
+)
+
+# Этот хэндлер будет срабатывать на апдейт типа CallbackQuery
+# с data 'big_button_1_pressed'
+@dp.callback_query(F.data == 'add_product_press')
+async def add_product_press(callback: CallbackQuery):
+    if callback.message.text != 'Добавить товар':
+        await callback.message.edit_text(
+            text='Добавить товар',
+            reply_markup=callback.message.reply_markup
+        )
+    @dp.message()
+    async def send_sms(message: types.Message):
+        text1 = message.text
+        await message.answer(text='Добавить '+ text1 + ' :)?')
+        if message.text == 'да':
+            await message.answer(text = 'Готово!')
+        else:
+            await message.answer(text='Отмена!')
+    await callback.answer()
+
+
+# Этот хэндлер будет срабатывать на апдейт типа CallbackQuery
+# с data 'big_button_2_pressed'
+@dp.callback_query(F.data == 'update_product_press')
+async def update_product_press(callback: CallbackQuery):
+    if callback.message.text != 'Изменить товар':
+        await callback.message.edit_text(
+            text='Изменить товар',
+            reply_markup=callback.message.reply_markup
+        )
+    await callback.answer()
+
+@dp.callback_query(F.data == 'delete_product_press')
+async def delete_product_press(callback: CallbackQuery):
+    if callback.message.text != 'Удалить товар':
+        await callback.message.edit_text(
+            text = 'Удалить товар',
+            reply_markup= callback.message.reply_markup
+        )
+    await callback.answer()
 
 
 
@@ -187,6 +505,19 @@ async def send_random_value(callback: types.CallbackQuery):
 # # @dp.message_handler(content_types=[types.ContentType.PHOTO])
 # # async def echo_photo(message: types.Message):
 # #     await bot.send_photo(msg.from_user.id, msg.photo)
+
+
+#Машина состояний
+storage = MemoryStorage() #инициалтзация хранилища
+
+
+
+
+
+
+
+
+
 
 
 if __name__ == '__main__':
